@@ -14,5 +14,5 @@ variable "image_tag" {
 
 variable "github_repo" {
   type    = string
-  default = "HamzaAlsoodani/ecs-url-shortener-project"
+  default = "HamzaAlsoodani@149546966/ecs-url-shortener-project@1391000351"
 }
