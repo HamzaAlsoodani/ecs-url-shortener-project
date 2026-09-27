@@ -11,3 +11,8 @@ variable "aws_region" {
 variable "image_tag" {
   type = string
 }
+
+variable "github_repo" {
+  type    = string
+  default = "HamzaAlsoodani/ecs-url-shortener-project"
+}

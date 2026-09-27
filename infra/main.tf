@@ -70,3 +70,15 @@ module "ecs" {
 
   depends_on = [module.alb]
 }
+
+module "github_oidc" {
+  source = "./modules/github-oidc"
+
+  project_name    = var.project_name
+  aws_region      = var.aws_region
+  github_repo     = var.github_repo
+  repository_arns = module.ecr.repository_arns
+  cluster_name    = module.ecs.cluster_name
+  service_names   = module.ecs.service_names
+  task_role_arns  = module.iam.all_role_arns
+}
