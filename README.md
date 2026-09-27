@@ -8,9 +8,13 @@ Shortening a URL through the load balancer:
 
 ![Shortening a URL](images/terminal-step-1.png)
 
-Opening the short link redirects to the original site, and the click is recorded by the worker:
+Opening the short link redirects to the original site:
 
 ![Short link redirecting](images/proof-url-shortener.gif)
+
+Each click is published to SQS, processed by the worker and saved to PostgreSQL. The dashboard's `/recent` endpoint then shows the click history:
+
+![Click history from the dashboard](images/history-of-clicks.png)
 
 The screenshots were taken while the stack was running on AWS. It has since been torn down with `terraform destroy` to avoid ongoing costs.
 
@@ -28,6 +32,10 @@ The screenshots were taken while the stack was running on AWS. It has since been
 The service is split into three containers. The **api** (Python, FastAPI) shortens URLs and handles redirects. The **worker** (Go) processes click events in the background. The **dashboard** (Go) serves analytics. All three run on ECS Fargate in private subnets and are managed with Terraform.
 
 ![ECS cluster running 3 services](images/ecs.png)
+
+The images for each service are stored in ECR, with immutable tags:
+
+![ECR repositories with immutable tags](images/ecr.png)
 
 ### Traffic Flow
 
@@ -70,8 +78,6 @@ The service is split into three containers. The **api** (Python, FastAPI) shorte
 - **Trivy:** Scans every image before it is pushed, and fails the pipeline on any high or critical vulnerability that has a fix.
 - **ECR:** Stores the images, tagged with the git commit SHA. Tags are immutable, so every deployment can be traced to an exact commit.
 - **Terraform:** All infrastructure is split into modules, with remote state in S3 and native state locking.
-
-![ECR repositories with immutable tags](images/ecr.png)
 
 ### Key Features Highlighted
 
