@@ -1,0 +1,10 @@
+# Accepted risks, reviewed on purpose. See README for details.
+
+# State bucket uses AWS-managed encryption (SSE-S3). A customer-managed KMS key adds cost with no real gain here.
+AWS-0132
+
+# The ALB is meant to be public: it is the only entry point, protected by WAF.
+AWS-0053
+
+# No domain name, so no TLS certificate. HTTPS is a listed future improvement.
+AWS-0054

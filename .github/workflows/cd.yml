@@ -1,0 +1,81 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency: cd
+
+env:
+  AWS_REGION: eu-west-2
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        include:
+          - service: api
+            path: app
+          - service: worker
+            path: services/worker
+          - service: dashboard
+            path: services/dashboard
+    env:
+      IMAGE: 076056288980.dkr.ecr.eu-west-2.amazonaws.com/url-shortener/${{ matrix.service }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::076056288980:role/url-shortener-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build image
+        run: docker build -t "$IMAGE" ${{ matrix.path }}
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Push image
+        run: docker push "$IMAGE"
+
+      - name: Get current task definition
+        run: aws ecs describe-task-definition --task-definition url-shortener-${{ matrix.service }} --query taskDefinition > task-def.json
+
+      - name: Put new image in task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@138c24f321fdbdf7edee4a685519d253cae2cdea # v1.9.0
+        with:
+          task-definition: task-def.json
+          container-name: ${{ matrix.service }}
+          image: ${{ env.IMAGE }}
+
+      - name: Deploy to ECS
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@c465972ecbd160473f22e683363b422a5412a3de # v2.6.3
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: url-shortener
+          service: ${{ matrix.service }}
+          wait-for-service-stability: true
+
+      - name: Fail if ECS rolled back
+        run: |
+          RUNNING=$(aws ecs describe-services --cluster url-shortener --services ${{ matrix.service }} --query 'services[0].taskDefinition' --output text)
+          if [ "$RUNNING" != "${{ steps.deploy.outputs.task-definition-arn }}" ]; then
+            echo "New version was unhealthy, ECS rolled back"
+            exit 1
+          fi
