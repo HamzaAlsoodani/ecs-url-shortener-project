@@ -33,3 +33,13 @@ module "alb" {
   public_subnet_ids     = module.vpc.public_subnet_ids
   alb_security_group_id = module.vpc.security_group_ids["alb"]
 }
+
+module "iam" {
+  source = "./modules/iam"
+
+  project_name            = var.project_name
+  aws_region              = var.aws_region
+  repository_arns         = module.ecr.repository_arns
+  queue_arn               = module.sqs.queue_arn
+  database_url_secret_arn = module.database.database_url_secret_arn
+}
