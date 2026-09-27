@@ -11,10 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+var sqsClient *sqs.Client
 
 type ClickEvent struct {
 	ShortCode string `json:"short_code"`
@@ -50,6 +55,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Credentials come from the ECS task role in AWS; locally AWS_ENDPOINT_URL points at LocalStack
+	awsCfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatalf("Failed to load AWS config: %v", err)
+	}
+	sqsClient = sqs.NewFromConfig(awsCfg)
 
 	// Health check endpoint
 	go func() {
@@ -117,14 +129,24 @@ func pollSQS(ctx context.Context, queueURL string) {
 			log.Println("Worker stopped")
 			return
 		default:
-			messages := receiveSQSMessages(queueURL)
+			messages := receiveSQSMessages(ctx, queueURL)
 			for _, msg := range messages {
-				if err := processClickEvent(msg); err != nil {
+				body := aws.ToString(msg.Body)
+				if err := processClickEvent(body); err != nil {
+					// Leave it on the queue so SQS redelivers it after the visibility timeout
 					log.Printf("Failed to process event: %v", err)
 					continue
 				}
 				// Delete message from queue after successful processing
-				log.Printf("Processed click event: %s", msg)
+				_, err := sqsClient.DeleteMessage(ctx, &sqs.DeleteMessageInput{
+					QueueUrl:      aws.String(queueURL),
+					ReceiptHandle: msg.ReceiptHandle,
+				})
+				if err != nil {
+					log.Printf("Failed to delete message: %v", err)
+					continue
+				}
+				log.Printf("Processed click event: %s", body)
 			}
 			if len(messages) == 0 {
 				time.Sleep(5 * time.Second)
@@ -133,11 +155,19 @@ func pollSQS(ctx context.Context, queueURL string) {
 	}
 }
 
-func receiveSQSMessages(queueURL string) []string {
-	// Students implement with AWS SDK SQS ReceiveMessage
-	// Use long polling: WaitTimeSeconds = 20
-	// MaxNumberOfMessages = 10
-	return nil
+func receiveSQSMessages(ctx context.Context, queueURL string) []types.Message {
+	out, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(queueURL),
+		MaxNumberOfMessages: 10,
+		WaitTimeSeconds:     20, // long polling: wait up to 20s for messages instead of hammering the API
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("Failed to receive messages: %v", err)
+		}
+		return nil
+	}
+	return out.Messages
 }
 
 func processClickEvent(raw string) error {

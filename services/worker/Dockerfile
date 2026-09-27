@@ -1,15 +1,15 @@
 
-FROM golang:1.23 AS builder
+FROM golang:1.24 AS builder
 WORKDIR /app
 
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
 
-RUN go mod tidy && CGO_ENABLED=0 go build -o worker .
+RUN CGO_ENABLED=0 go build -o worker .
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
