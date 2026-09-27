@@ -26,17 +26,19 @@ jobs:
             path: services/worker
           - service: dashboard
             path: services/dashboard
-    env:
-      IMAGE: 076056288980.dkr.ecr.eu-west-2.amazonaws.com/url-shortener/${{ matrix.service }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::076056288980:role/url-shortener-github-deploy
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        id: ecr
+
+      - name: Set image name
+        run: echo "IMAGE=${{ steps.ecr.outputs.registry }}/url-shortener/${{ matrix.service }}:${{ github.sha }}" >> "$GITHUB_ENV"
 
       - name: Build image
         run: docker build -t "$IMAGE" ${{ matrix.path }}

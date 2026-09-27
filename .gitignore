@@ -12,3 +12,5 @@ __pycache__/
 terraform.tfstate*
 *.tfvars
 crash.log
+*.tfplan
+infra/backend.hcl
