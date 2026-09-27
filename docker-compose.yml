@@ -15,6 +15,16 @@ services:
     ports:
       - "6379:6379"
 
+  # Fake AWS for local dev - only SQS is switched on
+  localstack:
+    image: localstack/localstack:3.8
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs
+    volumes:
+      - ./localstack/create-queue.sh:/etc/localstack/init/ready.d/create-queue.sh
+
   api:
     build: ./app
     ports:
@@ -22,19 +32,30 @@ services:
     environment:
       DATABASE_URL: postgresql://app:localdev@postgres:5432/shortener
       REDIS_URL: redis://redis:6379
-      SQS_QUEUE_URL: ""
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/click-events
       PORT: "8080"
+      # Send AWS calls to LocalStack. Dummy keys - LocalStack accepts anything
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
     depends_on:
       - postgres
       - redis
+      - localstack
 
   worker:
     build: ./services/worker
     environment:
       DATABASE_URL: postgres://app:localdev@postgres:5432/shortener?sslmode=disable
       SQS_QUEUE_URL: http://localstack:4566/000000000000/click-events
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
     depends_on:
       - postgres
+      - localstack
 
   dashboard:
     build: ./services/dashboard
