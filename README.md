@@ -31,52 +31,36 @@ The screenshots were taken while the stack was running on AWS. It has since been
 
 ### Containers
 
-- **Multi-stage builds:** Each Dockerfile has a build stage and a runtime stage. Build tools, compilers and caches stay in the build stage, and only what the service needs to run is copied into the final image. The Go services ship a single binary, and the api ships its virtualenv and source code.
-- **Non-root user:** Every container creates a dedicated system user and switches to it with `USER`, so a compromised process has no root access inside the container.
-- **Slim, pinned base images:** Images are built on `python:3.12-slim`, `golang:1.26` and `debian:bookworm-slim`, not `latest`, so builds are small and repeatable.
-- **Layer caching:** Dependency files (`requirements.txt`, `go.mod`) are copied and installed before the source code, so a code change doesn't reinstall every dependency.
-- **Static Go binaries:** Built with `CGO_ENABLED=0`, so they have no runtime dependency on system libraries.
-- **Graceful shutdown:** `CMD` uses exec form, so the process receives `SIGTERM` directly from ECS and can finish in-flight requests during a deployment.
-- **Minimal build context:** A `.dockerignore` keeps tests, caches and local files out of the api image.
+- **Multi-stage builds:** Build tools stay in the build stage. The final image only contains what the service needs to run.
+- **Non-root user:** Every container runs as a dedicated system user, not root.
+- **Slim, pinned base images:** `python:3.12-slim`, `golang:1.26` and `debian:bookworm-slim`, with dependencies installed before the source code is copied, for small images and fast cached builds.
 
 ### Infrastructure as Code
 
-- **Modular design:** The infrastructure is split into eight modules (`vpc`, `ecr`, `sqs`, `database`, `alb`, `iam`, `ecs`, `github-oidc`), each with its own `main.tf`, `variables.tf` and `outputs.tf`. The root `main.tf` only wires modules together by passing outputs into inputs, so each part can be read, reviewed and changed on its own.
-- **Remote state:** State is stored in S3, not on a laptop, so the whole team works from the same source of truth. The bucket has versioning, encryption, all public access blocked, a policy that rejects non-TLS requests, and `prevent_destroy`.
-- **State locking:** Uses Terraform's native S3 lockfile (`use_lockfile`), so two people or pipelines can never apply at the same time and corrupt the state. No separate DynamoDB lock table is needed.
-- **Bootstrap stack:** The state bucket is created by a separate `bootstrap` stack, which avoids the problem of Terraform needing a bucket before it can create one.
-- **No account details in the repo:** The backend uses partial configuration. The bucket name is supplied at `init` time from a local, gitignored `backend.hcl`.
-- **Pinned versions:** Terraform and provider versions are constrained, and `.terraform.lock.hcl` is committed with hashes for both macOS and Linux, so local runs and CI use identical providers.
-- **Consistent tagging:** `default_tags` adds `Project` and `ManagedBy` tags to every resource.
-- **Plan before apply:** Every change is reviewed with `terraform plan` and applied from the saved plan, so what gets applied is exactly what was reviewed.
+- **Modular Terraform:** Eight modules (`vpc`, `ecr`, `sqs`, `database`, `alb`, `iam`, `ecs`, `github-oidc`), each with its own inputs and outputs, wired together in the root module.
+- **Remote state with locking:** State lives in a versioned, encrypted S3 bucket, with Terraform's native S3 lockfile so two applies can never run at once.
+- **Reproducible:** Terraform and provider versions are pinned, and the lock file is committed.
+- **No account details in the repo:** The backend bucket is supplied at `init` time from a gitignored file.
 
 ### CI/CD
 
-- **No long-lived credentials:** GitHub Actions authenticates to AWS with OIDC and receives short-lived credentials for each run. There are no AWS access keys stored in GitHub or anywhere else.
-- **Tightly scoped trust:** The deploy role can only be assumed by this repository's `main` branch. The trust policy uses GitHub's immutable owner and repository IDs, so a renamed or recreated repository can't take it over.
-- **Least-privilege deploy role:** The role can only push to the three ECR repositories, update the three ECS services, and pass the three task roles to ECS.
-- **Review gate:** CI and Terraform checks run on every pull request. Nothing is deployed until a change is reviewed and merged.
-- **Security scanning:** Trivy scans every image on pull requests and again before push, and scans the Terraform for insecure settings. Accepted risks are documented with reasons in `.trivyignore` instead of being silently ignored.
-- **Supply chain protection:** Every third-party action is pinned to a full commit SHA, so a compromised tag can't inject code into a pipeline that has AWS access.
-- **Least-privilege workflows:** Each workflow declares minimal `permissions`, and only CD can request an OIDC token.
-- **Traceable releases:** Images are tagged with the git commit SHA in ECR repositories with immutable tags, so every running container maps to an exact commit.
-- **Safe deployments:** `concurrency` stops two deployments from running at once. Documentation-only changes don't trigger a deployment. After each deploy, the pipeline checks that ECS didn't roll back, so a failed release never shows as green.
+- **No long-lived credentials:** GitHub Actions uses OIDC to get short-lived AWS credentials. The role can only be assumed by this repo's `main` branch.
+- **Least-privilege deploy role:** It can only push to the three ECR repositories and update the three ECS services.
+- **Checks on every pull request:** Images are built and scanned with Trivy, and Terraform is formatted, validated and scanned, before anything is merged.
+- **Supply chain protection:** Every third-party action is pinned to a commit SHA.
+- **Traceable releases:** Images are tagged with the commit SHA, and tags are immutable.
 
 ### Security
 
-- **Private by default:** All services, the database and the cache run in private subnets with no public IPs and no route to the internet. The ALB is the only public entry point, and it sits behind WAF.
-- **Per-service IAM roles:** The api can only send to the click-events queue. The worker can only receive and delete from it. The dashboard has no AWS permissions at all. The execution role can only pull this project's images, write to its log groups and read one secret.
-- **Security groups reference each other:** Rules allow traffic from a security group, not an IP range, so new tasks created during a deployment are trusted automatically and nothing else is.
-- **No hardcoded secrets:** The database password is generated by Terraform, stored in Secrets Manager and injected at startup. It never appears in code, config or environment variable definitions.
-- **Encryption:** RDS storage, Redis (at rest and in transit), SQS messages, ECR images and Terraform state are all encrypted.
+- **Private by default:** Services, the database and the cache run in private subnets with no internet route. The ALB behind WAF is the only public entry point.
+- **Per-service IAM roles:** Each service can only access what it needs. The dashboard has no AWS permissions at all.
+- **No hardcoded secrets:** The database password is generated by Terraform and injected from Secrets Manager at startup.
 
 ### Reliability
 
-- **High availability:** Subnets and the ALB span two availability zones, and the api runs two tasks.
-- **Health checks everywhere:** The ALB checks `/healthz` on the api and dashboard. The worker has no load balancer, so ECS runs a container health check on it instead.
-- **Automatic rollback:** The ECS deployment circuit breaker returns a service to its last working version if new tasks keep failing.
-- **No lost events:** The worker only deletes a message after it has been saved, so failures are retried. Messages that fail 5 times go to a dead-letter queue instead of looping forever.
-- **Cost awareness:** Fargate runs on ARM64 (Graviton), ECR keeps only the last 10 images, logs are kept for 7 days, and the whole environment can be removed with a single `terraform destroy`.
+- **High availability:** Everything spans two availability zones, with health checks on every service.
+- **Automatic rollback:** The ECS deployment circuit breaker restores the last working version if a deployment fails.
+- **No lost events:** Failed messages are retried and move to a dead-letter queue after 5 attempts.
 
 ## Architecture Explanation
 
