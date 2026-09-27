@@ -131,24 +131,10 @@ ECR holds one private repository per service. Images are tagged with the git com
 
 ## Rolling Deployment Process
 
-Every merge to main is deployed by the CD pipeline. ECS replaces the running tasks gradually, so users are never left without a healthy version.
+Every merge to main is deployed by the CD pipeline. New tasks replace old ones gradually, so users always have a working version.
 
-### Step 1: New Image Built and Pushed
-
-The pipeline builds the image, scans it with Trivy, tags it with the commit SHA and pushes it to ECR. A new task definition revision is registered with the new image.
-
-### Step 2: New Tasks Started
-
-ECS starts the new tasks alongside the existing ones. The deployment is set to a minimum of 100% and a maximum of 200% healthy capacity, so the old version keeps serving all traffic while the new tasks start up.
-
-### Step 3: Health Checks
-
-The ALB checks `/healthz` on each new task. A task needs 2 passing checks before it receives traffic, and it gets a 60-second grace period to start. The worker has no load balancer, so ECS runs a container health check against its own `/healthz` endpoint instead.
-
-### Step 4: Traffic Shift Complete
-
-Once the new tasks are healthy, the ALB sends traffic to them and the old tasks are drained. Old tasks get 30 seconds to finish their in-flight requests before they stop.
-
-### Step 5: Automatic Rollback on Failure
-
-If the new tasks keep failing their health checks, the ECS deployment circuit breaker stops the rollout and restores the last working version. The pipeline then checks which version is running. If ECS rolled back, the pipeline fails, so the developer knows the release did not go out.
+1. **Build:** The pipeline builds and scans the image, tags it with the commit SHA and pushes it to ECR.
+2. **Start new tasks:** ECS starts the new version alongside the old one, which keeps serving all traffic.
+3. **Health check:** The ALB checks `/healthz` on each new task. Only healthy tasks receive traffic.
+4. **Switch over:** Traffic moves to the new tasks, and the old ones finish their current requests before stopping.
+5. **Rollback on failure:** If the new tasks keep failing, ECS automatically goes back to the last working version and the pipeline fails, so the developer knows.
